@@ -57,28 +57,28 @@ Message hidden in encoded.png
 Extracted ciphertext: b'\xd6\x88\xd0C...'
 Decrypted message: Meet me at 5 PM.
 
-###📸 Demo
+##📸 Demo
 Input Message: Meet me at 5 PM.
 
 Cover Image: A normal PNG file.
 
 Stego Image: Looks identical, but secretly carries the AES-encrypted message.
 
-###🎯 Applications
+##🎯 Applications
 Secure communication over open channels.
 
 Digital watermarking.
 
 Covert data transfer.
 
-###⚠️ Limitations
+##⚠️ Limitations
 Large messages may require larger images.
 
 JPEG compression may destroy hidden data (use PNG).
 
 Security relies on both the AES key and the stego technique.
 
-###👨‍💻 Authors
+##👨‍💻 Authors
 Lohet
 
 Built as part of a learning project combining cryptography & steganography.
