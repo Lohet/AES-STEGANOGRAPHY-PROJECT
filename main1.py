@@ -3,13 +3,27 @@ from Crypto.Util.Padding import pad, unpad
 from Crypto.Random import get_random_bytes
 from PIL import Image
 import stepic
+import base64
 
 # --- AES ENCRYPTION FUNCTIONS ---
 
 def aes_encrypt(message, key):
+    # Convert message to bytes (binary form)
+    message_bytes = message.encode()
+    print("Plaintext bytes:", message_bytes)
+    print("Plaintext binary:", ' '.join(format(b, '08b') for b in message_bytes))
+
+    # Pad and encrypt
     cipher = AES.new(key, AES.MODE_CBC)
-    ct_bytes = cipher.encrypt(pad(message.encode(), AES.block_size))
-    return cipher.iv + ct_bytes  # prepend IV for use in decryption
+    padded = pad(message_bytes, AES.block_size)
+    print("Padded binary:", ' '.join(format(b, '08b') for b in padded))
+
+    ct_bytes = cipher.encrypt(padded)
+    full_cipher = cipher.iv + ct_bytes
+    print("Ciphertext (bytes):", full_cipher)
+    print("Ciphertext (binary):", ' '.join(format(b, '08b') for b in full_cipher))
+
+    return full_cipher  # IV + ciphertext
 
 def aes_decrypt(ciphertext, key):
     iv = ciphertext[:AES.block_size]
@@ -22,8 +36,6 @@ def aes_decrypt(ciphertext, key):
 
 def hide_message_in_image(image_path, message_bytes, output_path):
     img = Image.open(image_path)
-    # Encode the message bytes as base64 string (stepic requires string)
-    import base64
     encoded_message = base64.b64encode(message_bytes).decode()
     encoded_img = stepic.encode(img, encoded_message.encode())
     encoded_img.save(output_path)
@@ -31,7 +43,6 @@ def hide_message_in_image(image_path, message_bytes, output_path):
 
 def extract_message_from_image(image_path):
     img = Image.open(image_path)
-    import base64
     encoded_message = stepic.decode(img)
     message_bytes = base64.b64decode(encoded_message)
     return message_bytes
@@ -39,20 +50,20 @@ def extract_message_from_image(image_path):
 # --- MAIN FLOW ---
 
 def main():
-    key = get_random_bytes(16)  # AES key (must be shared between sender and receiver)
+    key = get_random_bytes(16)  # AES key
+    print("AES Key (hex):", key.hex())
 
     secret_message = "I am the danger"
 
-    # Encrypt the secret message
+    # Encrypt
     ciphertext = aes_encrypt(secret_message, key)
-    print("Ciphertext (encrypted message):", ciphertext)
 
     # Hide ciphertext in image
     hide_message_in_image("original.png", ciphertext, "encoded.png")
 
-    # Later, extract and decrypt
+    # Extract and decrypt
     extracted_ciphertext = extract_message_from_image("encoded.png")
-    print("Extracted ciphertext:", extracted_ciphertext)
+    print("Extracted ciphertext (binary):", ' '.join(format(b, '08b') for b in extracted_ciphertext))
 
     decrypted_message = aes_decrypt(extracted_ciphertext, key)
     print("Decrypted message:", decrypted_message)
