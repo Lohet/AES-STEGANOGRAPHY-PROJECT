@@ -41,7 +41,7 @@ def extract_message_from_image(image_path):
 def main():
     key = get_random_bytes(16)  # AES key (must be shared between sender and receiver)
 
-    secret_message = "Meet me at 5 PM"
+    secret_message = "I am the danger"
 
     # Encrypt the secret message
     ciphertext = aes_encrypt(secret_message, key)
