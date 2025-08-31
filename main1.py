@@ -181,7 +181,8 @@ def embed_bits_into_image(
     if not eligible_blocks:
         raise RuntimeError("No eligible blocks found with current thresholds. Loosen thresholds or use a different image.")
 
-    # Prepare deterministic RNG per block based on key+iv+block index
+    # Prepare deterministic RNG per block based on key + block index for selecting positions.
+    # Use a second RNG seeded with key + iv + block index for deciding +1/-1 during embedding.
     bit_idx = 0
     total_bits = len(payload_bits)
     h, w = arr.shape
@@ -190,15 +191,18 @@ def embed_bits_into_image(
         if bit_idx >= total_bits:
             break
         r0, c0 = rb * bs, cb * bs
-        seed_material = key + iv + struct.pack(">II", rb, cb)
-        rng = seeded_rng(seed_material)
+        seed_pos_material = key + struct.pack(">II", rb, cb)            # positions independent of IV
+        seed_dir_material = key + iv + struct.pack(">II", rb, cb)      # direction uses IV + key
 
-        positions = pick_k_positions((bs, bs), cfg.k_pixels_per_block, rng)
+        rng_pos = seeded_rng(seed_pos_material)
+        rng_dir = seeded_rng(seed_dir_material)
+
+        positions = pick_k_positions((bs, bs), cfg.k_pixels_per_block, rng_pos)
         for (pr, pc) in positions:
             if bit_idx >= total_bits:
                 break
             pixel_val = int(arr[r0 + pr, c0 + pc])
-            new_val = lsb_match(pixel_val, payload_bits[bit_idx], rng)
+            new_val = lsb_match(pixel_val, payload_bits[bit_idx], rng_dir)
             arr[r0 + pr, c0 + pc] = np.uint8(new_val)
             bit_idx += 1
 
@@ -208,7 +212,7 @@ def embed_bits_into_image(
             f"Increase k_pixels_per_block, loosen thresholds, or use larger image."
         )
 
-    return Image.fromarray(arr, mode="L")
+    return Image.fromarray(arr)  # mode="L" triggers deprecation warning in some PIL versions
 
 
 def extract_bits_from_image(
@@ -237,9 +241,9 @@ def extract_bits_from_image(
         if len(bits) >= num_bits:
             break
         r0, c0 = rb * bs, cb * bs
-        seed_material = key + iv + struct.pack(">II", rb, cb)
-        rng = seeded_rng(seed_material)
-        positions = pick_k_positions((bs, bs), cfg.k_pixels_per_block, rng)
+        seed_pos_material = key + struct.pack(">II", rb, cb)  # positions must match embedding -> independent of IV
+        rng_pos = seeded_rng(seed_pos_material)
+        positions = pick_k_positions((bs, bs), cfg.k_pixels_per_block, rng_pos)
         for (pr, pc) in positions:
             if len(bits) >= num_bits:
                 break
@@ -283,14 +287,14 @@ def reveal_text(
     img = to_grayscale(img)
 
     # First, extract header: 4 bytes length + 16 bytes IV = 20 bytes = 160 bits
-    header_bits = extract_bits_from_image(img, 160, key, b"\x00"*16, cfg)
+    header_bits = extract_bits_from_image(img, 160, key, b"\x00"*16, cfg)  # iv argument not used by positions
     header = bits_to_bytes(header_bits)[:20]
     ct_len = struct.unpack(">I", header[:4])[0]
     iv = header[4:20]
 
-    # Now extract payload ciphertext bits
-    payload_bits = extract_bits_from_image(img, 160 + ct_len * 8, key, iv, cfg)
-    # Discard the first 160 header bits (already read)
+    # Now extract payload ciphertext bits (header + ciphertext) and slice
+    total_bits_needed = 160 + ct_len * 8
+    payload_bits = extract_bits_from_image(img, total_bits_needed, key, iv, cfg)
     ct_bits = payload_bits[160:]
     ciphertext = bits_to_bytes(ct_bits)[:ct_len]
 
