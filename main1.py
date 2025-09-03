@@ -79,10 +79,10 @@ def ncc(a: np.ndarray, b: np.ndarray) -> float:
 @dataclass
 class StegoConfig:
     block_size: int = 8
-    k_pixels_per_block: int = 10      # top-k random pixel positions chosen per eligible block
-    max_mse: float = 15.0             # lower is more similar
-    min_ssim: float = 0.95            # higher is more similar
-    min_ncc: float = 0.90             # higher is more similar
+    k_pixels_per_block: int = 32      # even more pixels per block for higher capacity
+    max_mse: float = 100.0            # much more permissive
+    min_ssim: float = 0.80            # much more permissive
+    min_ncc: float = 0.70             # much more permissive
 
 
 # ------------------------------
@@ -181,18 +181,12 @@ def embed_bits_into_image(
         _mse = mse(A, B)
         _ssim = ssim(A, B, data_range=255)
         _ncc = ncc(A, B)
-
         if _mse <= cfg.max_mse and _ssim >= cfg.min_ssim and _ncc >= cfg.min_ncc:
             eligible_blocks.append((rb_cb, A.copy()))
-
+    print(f"[DEBUG] Eligible blocks for embedding: {len(eligible_blocks)}")
     if not eligible_blocks:
         raise RuntimeError("No eligible blocks found with current thresholds. Loosen thresholds or use a different image.")
 
-<<<<<<< HEAD
-    # Prepare deterministic RNG per block based on key + block index for selecting positions.
-    # Use a second RNG seeded with key + iv + block index for deciding +1/-1 during embedding.
-=======
->>>>>>> fedea6be73e3405befaca1efbd7e507797679f9f
     bit_idx = 0
     total_bits = len(payload_bits)
     h, w = arr.shape
@@ -227,11 +221,7 @@ def embed_bits_into_image(
             f"Increase k_pixels_per_block, loosen thresholds, or use larger image."
         )
 
-<<<<<<< HEAD
-    return Image.fromarray(arr)  # mode="L" triggers deprecation warning in some PIL versions
-=======
     return Image.fromarray(arr).convert("L"), blocks_used
->>>>>>> fedea6be73e3405befaca1efbd7e507797679f9f
 
 
 def extract_bits_from_image(
@@ -259,6 +249,7 @@ def extract_bits_from_image(
         _ncc = ncc(A, B)
         if _mse <= cfg.max_mse and _ssim >= cfg.min_ssim and _ncc >= cfg.min_ncc:
             eligible_blocks.append((rb_cb, A))
+    print(f"[DEBUG] Eligible blocks for extraction: {len(eligible_blocks)}")
 
     bits: List[int] = []
     blocks_used = 0
@@ -285,6 +276,33 @@ def extract_bits_from_image(
 # ------------------------------
 # Public API: hide / reveal text (patched)
 # ------------------------------
+def embed_bits_directly(arr: np.ndarray, bits: List[int], start_idx: int = 0) -> None:
+    """Embed bits directly into the LSB of the array, starting from start_idx."""
+    h, w = arr.shape
+    total_pixels = h * w
+    for i, bit in enumerate(bits):
+        if start_idx + i >= total_pixels:
+            raise RuntimeError("Not enough space in image for embedding")
+        pixel_idx = start_idx + i
+        row = pixel_idx // w
+        col = pixel_idx % w
+        # Clear LSB and set to new bit
+        arr[row, col] = (arr[row, col] & 0xFE) | bit
+
+def extract_bits_directly(arr: np.ndarray, num_bits: int, start_idx: int = 0) -> List[int]:
+    """Extract bits directly from the LSB of the array, starting from start_idx."""
+    h, w = arr.shape
+    total_pixels = h * w
+    if start_idx + num_bits > total_pixels:
+        raise RuntimeError("Not enough bits in image")
+    bits = []
+    for i in range(num_bits):
+        pixel_idx = start_idx + i
+        row = pixel_idx // w
+        col = pixel_idx % w
+        bits.append(arr[row, col] & 1)
+    return bits
+
 def hide_text(
     cover_path: str,
     stego_out_path: str,
@@ -293,22 +311,31 @@ def hide_text(
     cfg: StegoConfig = StegoConfig()
 ) -> None:
     img = Image.open(cover_path)
-    img = to_grayscale(img)
+    img = img.convert("RGB")
+    arr = np.array(img)
+    blue = arr[:, :, 2]
 
     iv, ct = aes_encrypt_text(key, text)
-
-    header = struct.pack(">I", len(ct)) + iv  # 4 bytes length + 16 bytes IV
+    header = struct.pack(">I", len(ct)) + iv
     header_bits = bytes_to_bits(header)
     ct_bits = bytes_to_bits(ct)
 
-    # Step 1: embed header with a fixed zero-IV seed so header can be deterministically found later
-    iv_zero = b"\x00" * 16
-    stego_after_header, header_blocks_used = embed_bits_into_image(img, header_bits, key, iv_zero, cfg, start_block=0)
+    total_bits = len(header_bits) + len(ct_bits)
+    h, w = blue.shape
+    if total_bits > h * w:
+        raise RuntimeError(f"Image too small. Need {total_bits} pixels, but image has only {h * w} pixels.")
 
-    # Step 2: embed ciphertext starting after header_blocks_used using the real iv as seed
-    stego_final, ct_blocks_used = embed_bits_into_image(stego_after_header, ct_bits, key, iv, cfg, start_block=header_blocks_used)
+    try:
+        # Embed header starting at beginning of image
+        embed_bits_directly(blue, header_bits, 0)
+        # Embed ciphertext after header
+        embed_bits_directly(blue, ct_bits, len(header_bits))
+    except RuntimeError as e:
+        raise RuntimeError(f"Embedding failed: {e}")
 
-    stego_final.save(stego_out_path)
+    arr[:, :, 2] = blue
+    out_img = Image.fromarray(arr)
+    out_img.save(stego_out_path)
 
 
 def reveal_text(
@@ -317,31 +344,23 @@ def reveal_text(
     cfg: StegoConfig = StegoConfig()
 ) -> str:
     img = Image.open(stego_path)
-    img = to_grayscale(img)
+    img = img.convert("RGB")
+    arr = np.array(img)
+    blue = arr[:, :, 2]
 
-<<<<<<< HEAD
-    # First, extract header: 4 bytes length + 16 bytes IV = 20 bytes = 160 bits
-    header_bits = extract_bits_from_image(img, 160, key, b"\x00"*16, cfg)  # iv argument not used by positions
-=======
-    # Step 1: extract header using iv_zero (same deterministic scheme used during embedding)
-    iv_zero = b"\x00" * 16
-    header_bits, header_blocks_used = extract_bits_from_image(img, 160, key, iv_zero, cfg, start_block=0)
->>>>>>> fedea6be73e3405befaca1efbd7e507797679f9f
-    header = bits_to_bytes(header_bits)[:20]
-    ct_len = struct.unpack(">I", header[:4])[0]
-    iv = header[4:20]
+    try:
+        # Extract header (160 bits = 20 bytes: 4 for length + 16 for IV)
+        header_bits = extract_bits_directly(blue, 160, 0)
+        header = bits_to_bytes(header_bits)[:20]
+        ct_len = struct.unpack(">I", header[:4])[0]
+        iv = header[4:20]
 
-<<<<<<< HEAD
-    # Now extract payload ciphertext bits (header + ciphertext) and slice
-    total_bits_needed = 160 + ct_len * 8
-    payload_bits = extract_bits_from_image(img, total_bits_needed, key, iv, cfg)
-    ct_bits = payload_bits[160:]
-=======
-    # Step 2: extract ciphertext bits starting from header_blocks_used using the extracted IV
-    ct_num_bits = ct_len * 8
-    ct_bits, _ct_blocks_used = extract_bits_from_image(img, ct_num_bits, key, iv, cfg, start_block=header_blocks_used)
->>>>>>> fedea6be73e3405befaca1efbd7e507797679f9f
-    ciphertext = bits_to_bytes(ct_bits)[:ct_len]
+        # Extract ciphertext
+        ct_num_bits = ct_len * 8
+        ct_bits = extract_bits_directly(blue, ct_num_bits, 160)
+        ciphertext = bits_to_bytes(ct_bits)[:ct_len]
+    except RuntimeError as e:
+        raise RuntimeError(f"Extraction failed: {e}")
 
     return aes_decrypt_text(key, iv, ciphertext)
 
